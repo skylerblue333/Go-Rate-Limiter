@@ -2,78 +2,94 @@ package main
 
 import (
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
 )
 
 type Visitor struct {
-	tokens    int
-	lastSeen  time.Time
+	tokens   float64
+	lastSeen time.Time
 }
 
 type RateLimiter struct {
-	mu         sync.Mutex
-	visitors   map[string]*Visitor
-	rate       int
-	capacity   int
+	mu       sync.Mutex
+	visitors map[string]*Visitor
+	rate     float64
+	capacity float64
+	stop     chan struct{}
+	close    sync.Once
 }
 
 func NewRateLimiter(rate, capacity int) *RateLimiter {
-	rl := &RateLimiter{
-		visitors: make(map[string]*Visitor),
-		rate:     rate,
-		capacity: capacity,
+	if rate <= 0 || capacity <= 0 {
+		panic("rate and capacity must be positive")
 	}
+	rl := &RateLimiter{visitors: make(map[string]*Visitor), rate: float64(rate), capacity: float64(capacity), stop: make(chan struct{})}
 	go rl.cleanup()
 	return rl
 }
 
+func (rl *RateLimiter) Close() { rl.close.Do(func() { close(rl.stop) }) }
+
 func (rl *RateLimiter) cleanup() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
 	for {
-		time.Sleep(time.Minute)
-		rl.mu.Lock()
-		for ip, v := range rl.visitors {
-			if time.Since(v.lastSeen) > 3*time.Minute {
-				delete(rl.visitors, ip)
+		select {
+		case <-ticker.C:
+			rl.mu.Lock()
+			for ip, visitor := range rl.visitors {
+				if time.Since(visitor.lastSeen) > 3*time.Minute {
+					delete(rl.visitors, ip)
+				}
 			}
+			rl.mu.Unlock()
+		case <-rl.stop:
+			return
 		}
-		rl.mu.Unlock()
 	}
 }
 
 func (rl *RateLimiter) Allow(ip string) bool {
+	if ip == "" {
+		return false
+	}
+	now := time.Now()
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-
-	v, exists := rl.visitors[ip]
+	visitor, exists := rl.visitors[ip]
 	if !exists {
-		rl.visitors[ip] = &Visitor{
-			tokens:   rl.capacity - 1,
-			lastSeen: time.Now(),
-		}
+		rl.visitors[ip] = &Visitor{tokens: rl.capacity - 1, lastSeen: now}
 		return true
 	}
-
-	now := time.Now()
-	elapsed := now.Sub(v.lastSeen).Seconds()
-	v.tokens += int(elapsed) * rl.rate
-	if v.tokens > rl.capacity {
-		v.tokens = rl.capacity
+	visitor.tokens = min(rl.capacity, visitor.tokens+now.Sub(visitor.lastSeen).Seconds()*rl.rate)
+	visitor.lastSeen = now
+	if visitor.tokens < 1 {
+		return false
 	}
-	v.lastSeen = now
+	visitor.tokens--
+	return true
+}
 
-	if v.tokens > 0 {
-		v.tokens--
-		return true
+func min(left, right float64) float64 {
+	if left < right {
+		return left
 	}
-	return false
+	return right
+}
+
+func clientIP(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
 }
 
 func limitMiddleware(rl *RateLimiter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		if !rl.Allow(ip) {
+		if !rl.Allow(clientIP(r.RemoteAddr)) {
 			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 			return
 		}
@@ -82,13 +98,10 @@ func limitMiddleware(rl *RateLimiter, next http.Handler) http.Handler {
 }
 
 func main() {
-	rl := NewRateLimiter(2, 5) // 2 req/sec, burst of 5
-	
+	rl := NewRateLimiter(2, 5)
+	defer rl.Close()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("OK"))
-	})
-
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("OK")) })
 	log.Println("Rate limiter running on :8080")
-	http.ListenAndServe(":8080", limitMiddleware(rl, mux))
+	log.Fatal(http.ListenAndServe(":8080", limitMiddleware(rl, mux)))
 }
