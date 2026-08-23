@@ -1,90 +1,104 @@
-# Go Rate Limiter
+# Sky Rate Guard
 
-Production-oriented, in-process token-bucket HTTP middleware for Go services that need deterministic request admission, burst control, lifecycle-safe cleanup, and an integration point for telemetry.
+A focused, independently deployable token-bucket rate limiter for APIs and gateways, built in Go and packaged as a small container.
 
-> **SkyCoin4444 / IITR infrastructure component:** designed as a reusable traffic-control primitive that can sit in front of APIs, gateways, gRPC adapters, and internal services.
+Sky Rate Guard can run in two modes at the same time:
 
-## What is implemented
-
-- Fractional token-bucket refill for smooth admission control.
-- Configurable refill rate and burst capacity.
-- Process-local client state with automatic stale-entry cleanup.
-- Race-safe concurrent access.
-- Idempotent shutdown for service and test lifecycles.
-- Optional observer callback for Prometheus/OpenTelemetry/application metrics.
-- HTTP middleware returning `429 Too Many Requests` with `Retry-After: 1` on denial.
-- IPv4/IPv6-safe `host:port` extraction through `net.SplitHostPort`.
-- Unit tests, race tests, `go vet`, formatting verification, benchmark coverage, and `govulncheck` in GitHub Actions.
+- **middleware guard** — the root route is protected and returns `429 Too Many Requests` when a client exceeds quota;
+- **decision service** — `POST /v1/check` accepts a client/tenant key and returns an allow/deny decision for an upstream gateway.
 
 ## Quick start
 
 ```bash
-go test -race ./...
-go vet ./...
-go test -run '^$' -bench BenchmarkRateLimiterAllow -benchtime=1s ./...
+RATE_LIMIT_RPS=10 \
+RATE_LIMIT_BURST=20 \
+MAX_VISITORS=100000 \
 go run .
 ```
 
-The example server listens on `:8080`.
+Health and metrics:
 
-## Embedding
-
-```go
-rl := NewRateLimiter(100, 200)
-defer rl.Close()
-
-handler := limitMiddleware(rl, yourHandler)
+```bash
+curl http://localhost:8080/healthz
+curl http://localhost:8080/metrics
 ```
 
-For production telemetry, attach an observer and forward the event to the metrics system already used by your service:
+Decision API:
 
-```go
-rl.SetObserver(func(client string, allowed bool, remaining float64) {
-    // Export to your existing metrics/telemetry pipeline.
-})
+```bash
+curl -sS http://localhost:8080/v1/check \
+  -H 'content-type: application/json' \
+  -d '{"key":"tenant-123"}'
 ```
 
-## Architecture
+Example response:
 
-```text
-Client
-  |
-  v
-HTTP / API Gateway
-  |
-  v
-RateLimiter.Allow(identity)
-  |---- denied ----> HTTP 429 + Retry-After
-  |
-  +---- allowed ---> Application / gRPC / protocol service
-                         |
-                         +--> telemetry observer
+```json
+{"allowed":true,"remaining":19}
 ```
 
-The limiter deliberately does **not** pretend to be a distributed quota service. Replicas maintain independent buckets. Global quotas, tenant-wide limits, and abuse controls should be enforced at an upstream gateway or with a reviewed shared-state design.
+## Configuration
 
-## Productization / value surfaces
+| Variable | Default | Purpose |
+|---|---:|---|
+| `LISTEN_ADDR` | `:8080` | HTTP listen address |
+| `RATE_LIMIT_RPS` | `10` | tokens refilled per second |
+| `RATE_LIMIT_BURST` | `20` | maximum token capacity |
+| `MAX_VISITORS` | `100000` | hard bound on process-local identities |
+| `IDENTITY_HEADER` | empty | optional trusted identity header for middleware mode |
 
-This repository can support multiple legitimate commercial offerings without pretending that revenue already exists:
+When `IDENTITY_HEADER` is empty, middleware mode uses the TCP peer address. The service intentionally does **not** trust `X-Forwarded-For` automatically because that header can be client-spoofed unless a trusted proxy sanitizes it.
 
-1. Embeddable API-rate-limit middleware licensing/support.
-2. Managed API quota service built around the same admission-control contract.
-3. Multi-tenant SaaS usage-control layer.
-4. Gateway integration package for Go microservice platforms.
-5. gRPC service quota adapter.
-6. Observability/telemetry integration package.
-7. Enterprise deployment and architecture services.
-8. Security hardening and abuse-control assessments.
-9. SDKs/connectors for SkyCoin4444 ecosystem services.
-10. Premium support, SLA, and maintenance contracts.
-11. Training, implementation, and migration services.
+## Runtime endpoints
 
-These are **potential revenue streams**, not claims of current revenue, valuation, or customer adoption.
+- `GET /healthz` — liveness
+- `GET /readyz` — readiness
+- `GET /metrics` — compact JSON decision counters/cardinality
+- `POST /v1/check` — sidecar/gateway allow-deny decision API
+- `/` — example middleware-protected route
+
+Denied middleware requests include `Retry-After` and `X-RateLimit-Remaining` headers.
+
+## Container deployment
+
+```bash
+docker compose up --build
+```
+
+The image runs as a non-root user on a distroless runtime. The Compose example additionally uses a read-only filesystem and `no-new-privileges`.
 
 ## Verification
 
-GitHub Actions verifies formatting, `go vet`, race-detector tests, a benchmark smoke test, and Go vulnerability analysis on pushes and pull requests.
+```bash
+gofmt -w *.go
+go vet ./...
+go test ./...
+go test -race ./...
+go test -run '^$' -bench BenchmarkRateLimiterAllow -benchtime=100ms ./...
+```
 
-## Scope
+GitHub Actions additionally runs `govulncheck`, compiles the standalone binary, and builds the production container image.
 
-This component is intentionally process-local. A production architecture requiring globally consistent quotas should pair it with a trusted edge gateway, tenant identity model, distributed state where required, metrics, alerting, and an explicit failure policy.
+## Product status
+
+### Implemented and testable
+
+- token-bucket refill/burst behavior;
+- per-identity isolation;
+- bounded active identity map;
+- middleware and decision-service integration models;
+- configurable identity header;
+- operational decision counters;
+- health/readiness probes;
+- graceful shutdown;
+- Docker deployment package.
+
+### Deliberately not claimed
+
+Sky Rate Guard currently provides **process-local** quotas. It is not yet a globally distributed rate-limit service and does not claim Redis-backed shared quotas, mTLS, edge DDoS absorption, WAF functionality, billing, a tenant control plane, or an SLA.
+
+See [`PRODUCT.md`](PRODUCT.md) for commercial packaging boundaries and [`SECURITY.md`](SECURITY.md) before exposing the service to public traffic.
+
+## SKYCOIN4444 integration
+
+Sky Rate Guard is productized independently so it can be deployed or sold by itself, while remaining reusable as the rate-limiting boundary in the wider SKYCOIN4444 gateway and microservice architecture.

@@ -1,0 +1,64 @@
+openapi: 3.0.3
+info:
+  title: Sky Rate Guard Decision API
+  version: 0.1.0
+  description: Process-local token-bucket rate-limit decision service.
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      responses:
+        '200':
+          description: Service is running
+  /readyz:
+    get:
+      summary: Readiness probe
+      responses:
+        '200':
+          description: Service is ready
+  /metrics:
+    get:
+      summary: Operational decision counters
+      responses:
+        '200':
+          description: Current process-local limiter counters
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [allowed, denied, active_visitors, max_visitors]
+                properties:
+                  allowed: { type: integer, format: int64, minimum: 0 }
+                  denied: { type: integer, format: int64, minimum: 0 }
+                  active_visitors: { type: integer, minimum: 0 }
+                  max_visitors: { type: integer, minimum: 1 }
+  /v1/check:
+    post:
+      summary: Consume one token for a caller-supplied identity key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [key]
+              properties:
+                key:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+      responses:
+        '200':
+          description: Rate-limit decision
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [allowed, remaining]
+                properties:
+                  allowed: { type: boolean }
+                  remaining: { type: number, minimum: 0 }
+                  retry_after_ms: { type: integer, format: int64, minimum: 1 }
+        '400': { description: Invalid request payload }
+        '405': { description: Method not allowed }

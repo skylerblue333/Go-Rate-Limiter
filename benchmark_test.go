@@ -3,7 +3,9 @@ package main
 import "testing"
 
 func BenchmarkRateLimiterAllow(b *testing.B) {
-	rl := NewRateLimiter(1000000, 1000000)
+	// Keep benchmark capacity far above the timed iteration count so this
+	// measures the hot allow path instead of eventually benchmarking denials.
+	rl := NewRateLimiterWithLimit(1<<30, 1<<30, 16)
 	defer rl.Close()
 	b.ReportAllocs()
 	b.ResetTimer()
