@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -41,6 +42,39 @@ func TestRateLimiterRejectsInvalidConfiguration(t *testing.T) {
 			NewRateLimiter(test.rate, test.capacity)
 		}()
 	}
+}
+
+func TestRateLimiterObserver(t *testing.T) {
+	rl := NewRateLimiter(1, 1)
+	defer rl.Close()
+
+	var allowed, denied atomic.Int64
+	rl.SetObserver(func(_ string, ok bool, _ float64) {
+		if ok {
+			allowed.Add(1)
+		} else {
+			denied.Add(1)
+		}
+	})
+
+	if !rl.Allow("203.0.113.10") {
+		t.Fatal("first request should be allowed")
+	}
+	if rl.Allow("203.0.113.10") {
+		t.Fatal("second request should be denied")
+	}
+	if got := allowed.Load(); got != 1 {
+		t.Fatalf("allowed observer events = %d, want 1", got)
+	}
+	if got := denied.Load(); got != 1 {
+		t.Fatalf("denied observer events = %d, want 1", got)
+	}
+}
+
+func TestRateLimiterCloseIsIdempotent(t *testing.T) {
+	rl := NewRateLimiter(1, 1)
+	rl.Close()
+	rl.Close()
 }
 
 func TestClientIP(t *testing.T) {
