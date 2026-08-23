@@ -350,7 +350,9 @@ func main() {
 	defer rl.Close()
 
 	protected := http.NewServeMux()
-	protected.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("request allowed by Sky Rate Guard\n")) })
+	protected.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("request allowed by Sky Rate Guard\n"))
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthHandler)
