@@ -1,0 +1,25 @@
+services:
+  sky-rate-guard:
+    build: .
+    image: sky-rate-guard:local
+    ports:
+      - "8080:8080"
+    environment:
+      LISTEN_ADDR: ":8080"
+      RATE_LIMIT_RPS: "10"
+      RATE_LIMIT_BURST: "20"
+      MAX_VISITORS: "100000"
+      # Optional. When set, requests to the protected example route must supply it.
+      # IDENTITY_HEADER: "X-API-Key"
+    healthcheck:
+      test: ["CMD", "/sky-rate-guard", "-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
