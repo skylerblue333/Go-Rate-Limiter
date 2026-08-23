@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -49,8 +51,8 @@ func TestRateLimiterObserver(t *testing.T) {
 	defer rl.Close()
 
 	var allowed, denied atomic.Int64
-	rl.SetObserver(func(_ string, ok bool, _ float64) {
-		if ok {
+	rl.SetObserver(func(_ string, decision Decision) {
+		if decision.Allowed {
 			allowed.Add(1)
 		} else {
 			denied.Add(1)
@@ -75,6 +77,47 @@ func TestRateLimiterCloseIsIdempotent(t *testing.T) {
 	rl := NewRateLimiter(1, 1)
 	rl.Close()
 	rl.Close()
+}
+
+func TestRateLimiterBoundsIdentityMemory(t *testing.T) {
+	rl := NewRateLimiterWithConfig(RateLimiterConfig{Rate: 1, Capacity: 1, MaxVisitors: 1})
+	defer rl.Close()
+
+	if !rl.Allow("first") {
+		t.Fatal("first identity should be accepted")
+	}
+	decision := rl.AllowDecision("second")
+	if decision.Allowed {
+		t.Fatal("new identity should be denied once the visitor bound is reached")
+	}
+}
+
+func TestRateLimiterHTTPMiddleware(t *testing.T) {
+	rl := NewRateLimiter(1, 1)
+	defer rl.Close()
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := limitMiddlewareWithIdentity(rl, func(*http.Request) string { return "tenant-a" })(next)
+
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/", nil))
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("first status = %d", first.Code)
+	}
+	if first.Header().Get("X-RateLimit-Limit") != "1" {
+		t.Fatalf("limit header = %q", first.Header().Get("X-RateLimit-Limit"))
+	}
+
+	second := httptest.NewRecorder()
+	handler.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/", nil))
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d", second.Code)
+	}
+	if second.Header().Get("Retry-After") == "" {
+		t.Fatal("Retry-After header missing")
+	}
 }
 
 func TestClientIP(t *testing.T) {
