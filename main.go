@@ -18,11 +18,11 @@ type Visitor struct {
 
 // RateLimiterConfig controls lifecycle and memory bounds.
 type RateLimiterConfig struct {
-	Rate           int
-	Capacity       int
-	CleanupEvery   time.Duration
-	IdleTTL        time.Duration
-	MaxVisitors    int
+	Rate         int
+	Capacity     int
+	CleanupEvery time.Duration
+	IdleTTL      time.Duration
+	MaxVisitors  int
 }
 
 // Decision is the observable admission result for a request.
@@ -39,16 +39,16 @@ type Decision struct {
 // embedding in gateways, APIs, and gRPC adapters. Distributed/global quotas
 // should still be enforced by an upstream gateway or reviewed shared store.
 type RateLimiter struct {
-	mu       sync.Mutex
-	visitors map[string]*Visitor
-	rate     float64
-	capacity float64
+	mu           sync.Mutex
+	visitors     map[string]*Visitor
+	rate         float64
+	capacity     float64
 	cleanupEvery time.Duration
-	idleTTL  time.Duration
-	maxVisitors int
-	stop     chan struct{}
-	close    sync.Once
-	observer func(client string, decision Decision)
+	idleTTL      time.Duration
+	maxVisitors  int
+	stop         chan struct{}
+	close        sync.Once
+	observer     func(client string, decision Decision)
 }
 
 // NewRateLimiter creates a limiter with rate tokens refilled per second and
@@ -157,7 +157,7 @@ func (rl *RateLimiter) AllowDecision(identity string) Decision {
 	visitor.lastSeen = now
 	if visitor.tokens < 1 {
 		missing := 1 - visitor.tokens
-		retry := time.Duration(missing/rl.rate*float64(time.Second))
+		retry := time.Duration(missing / rl.rate * float64(time.Second))
 		if retry < time.Millisecond {
 			retry = time.Millisecond
 		}
@@ -200,7 +200,7 @@ func clientIP(remoteAddr string) string {
 type IdentityExtractor func(*http.Request) string
 
 func limitMiddleware(rl *RateLimiter, next http.Handler) http.Handler {
-	return limitMiddlewareWithIdentity(rl, clientIPFromRequest)
+	return limitMiddlewareWithIdentity(rl, clientIPFromRequest)(next)
 }
 
 func limitMiddlewareWithIdentity(rl *RateLimiter, identity IdentityExtractor) func(http.Handler) http.Handler {
