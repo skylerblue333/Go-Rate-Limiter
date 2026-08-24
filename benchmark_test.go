@@ -3,7 +3,9 @@ package main
 import "testing"
 
 func BenchmarkRateLimiterAllow(b *testing.B) {
-	rl := NewRateLimiter(1000000, 1000000)
+	// Keep the benchmark focused on limiter admission overhead rather than on
+	// intentionally exhausting the token bucket during fast CI runners.
+	rl := NewRateLimiter(1_000_000_000, 1_000_000_000)
 	defer rl.Close()
 	b.ReportAllocs()
 	b.ResetTimer()
